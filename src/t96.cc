@@ -31,9 +31,9 @@ void t96DipoleShield(double psi, double x, double y, double z,
 	/*combine them (equation 16)*/
 	double cps = cos(psi);
 	double sps = sin(psi);
-	*Bx = Bx0*cps + Bx0*sps;
-	*By = By0*cps + By0*sps;
-	*Bz = Bz0*cps + Bz0*sps;
+	*Bx = Bx0*cps + Bx1*sps;
+	*By = By0*cps + By1*sps;
+	*Bz = Bz0*cps + Bz1*sps;
 
 }
 
@@ -60,6 +60,7 @@ void CylHarmPerp(	double x, double y, double z,
 
 
 	/* equation 10, 11 and 12 */
+	double bx = 0.0, br = 0.0, bp = 0.0;
 	bx = 0.0;
 	br = 0.0;
 	bp = 0.0;
@@ -71,10 +72,10 @@ void CylHarmPerp(	double x, double y, double z,
 		expxb1 = exp(xb1);
 		rhob0 = rho/b[i];
 		rhob1 = rho/b[i+3];
-		J0rb0 = j0(rhob0);
-		J0rb1 = j0(rhob1);
-		J1rb0 = j1(rhob0);
-		J1rb1 = j1(rhob1);
+		J0rb0 = std::cyl_bessel_j(0,rhob0);
+		J0rb1 = std::cyl_bessel_j(0,rhob1);
+		J1rb0 = std::cyl_bessel_j(1,rhob0);
+		J1rb1 = std::cyl_bessel_j(1,rhob1);
 
 		/* sum them */
 		bx += -a[i]*expxb0*J1rb0 + (a[i+3]/b[i+3])*expxb1*(rho*J0rb1 + x*J1rb1);
@@ -85,7 +86,7 @@ void CylHarmPerp(	double x, double y, double z,
 	/* multiply by sine or cosine */
 	bx *= sinp;
 	br *= sinp;
-	Bp *= cosp;
+	bp *= cosp;
 
 	/* convert back to GSM*/
 	*Bx = bx;
@@ -118,6 +119,7 @@ void CylHarmPara(	double x, double y, double z,
 
 
 	/* equation 13 and 14 (15 = 0)*/
+	double bx = 0.0, br = 0.0, bp = 0.0;
 	bx = 0.0;
 	br = 0.0;
 
@@ -129,10 +131,10 @@ void CylHarmPara(	double x, double y, double z,
 		expxd1 = exp(xd1);
 		rhod0 = rho/d[i];
 		rhod1 = rho/d[i+3];
-		J0rd0 = j0(rhod0);
-		J0rd1 = j0(rhod1);
-		J1rd0 = j1(rhod0);
-		J1rd1 = j1(rhod1);
+		J0rd0 = std::cyl_bessel_j(0,rhod0);
+		J0rd1 = std::cyl_bessel_j(0,rhod1);
+		J1rd0 = std::cyl_bessel_j(1,rhod0);
+		J1rd1 = std::cyl_bessel_j(1,rhod1);
 
 		/* sum them */
 		bx += -c[i]*expxd0*J1rd0 + c[i+3]*expxd1*(rhod1*J1rd1 -((x+d[i+3])/d[i+3])*J0rd1);
@@ -233,12 +235,53 @@ double xksi() {
 
 }
 
-double tksi() {
+double tksi(double xksi, double xks0, double dxksi) {
+    static bool initialized = false;
+    static double tdz3;
 
+    if (!initialized) {
+        tdz3 = 2.0 * std::pow(dxksi, 3);
+        initialized = true;
+    }
+
+    double tksii = 0.0;
+
+    if (xksi - xks0 < -dxksi) {
+        tksii = 0.0;
+    } else if (xksi - xks0 >= dxksi) {
+        tksii = 1.0;
+    } else if (xksi >= xks0 - dxksi && xksi < xks0) {
+        double br3 = std::pow(xksi - xks0 + dxksi, 3);
+        tksii = 1.5 * br3 / (tdz3 + br3);
+    } else if (xksi >= xks0 && xksi < xks0 + dxksi) {
+        double br3 = std::pow(xksi - xks0 - dxksi, 3);
+        tksii = 1.0 + 1.5 * br3 / (tdz3 - br3);
+    }
+
+    return tksii;
 }
 
-void t96Dipole( double psi, double x, double y, double z, 
-				double *Bx, souble *By, double *Bz) {
-	
-	
+
+
+void t96Dipole(double psi, double x, double y, double z, 
+               double* Bx, double* By, double* Bz) {
+    
+    // Precompute trigonometric values
+    double sps = std::sin(psi);
+    double cps = std::cos(psi);
+
+    // Intermediate variables
+    double P = x * x;
+    double T = y * y;
+    double U = z * z;
+    double V = 3.0 * z * x;
+
+    // Compute dipole scaling factor (constant from Fortran)
+    double R2 = P + T + U;
+    double Q = 30574.0 / std::pow(R2, 2.5);  // Equivalent to sqrt(R2)^5
+
+    // Compute components in GSM
+    *Bx = Q * ((T + U - 2.0 * P) * sps - V * cps);
+    *By = -3.0 * y * Q * (x * sps + z * cps);
+    *Bz = Q * ((P + T - 2.0 * U) * cps - V * sps);
 }

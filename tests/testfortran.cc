@@ -47,8 +47,8 @@ bool compareResults(int numTests, bool verbose) {
         double bx_f, by_f, bz_f;
         double bx_c, by_c, bz_c;
 
-        t89c_(&iopt, parmod, &psi, &x, &y, &z, &bx_f, &by_f, &bz_f);
-        t89(iopt, parmod, psi, x, y, z, &bx_c, &by_c, &bz_c);
+        t96_(&iopt, parmod, &psi, &x, &y, &z, &bx_f, &by_f, &bz_f);
+        t96(iopt, parmod, psi, x, y, z, &bx_c, &by_c, &bz_c);
 
         double dx = std::fabs(bx_f - bx_c);
         double dy = std::fabs(by_f - by_c);
