@@ -149,26 +149,585 @@ void CylHarmPara(    double x, double y, double z,
 
 }
 
-void t96Intercon(    double x, double y, double z,
-                    double *Bx, double *By, double *Bz) {
 
+/**
+ * Calculates the interconnection magnetic field components (Bx, By, Bz)
+ * inside the magnetosphere using Cartesian harmonics.
+ *
+ * Note: This operates in a rotated coordinate system aligned with IMF Bz.
+ *
+ * @param x   GSM X coordinate (Re)
+ * @param y   GSM Y coordinate (Re)
+ * @param z   GSM Z coordinate (Re)
+ * @param Bx  Pointer to store X component of magnetic field (nT)
+ * @param By  Pointer to store Y component of magnetic field (nT)
+ * @param Bz  Pointer to store Z component of magnetic field (nT)
+ */
+void t96Intercon(double x, double y, double z, double* Bx, double* By, double* Bz) {
+    // Static ensures initialization happens only once (equivalent to DATA + M check)
+    static const std::array<double, 15> A = {
+        -8.411078731, 5932254.951, -9073284.93,
+        -11.68794634, 6027598.824, -9218378.368,
+        -6.508798398, -11824.42793, 18015.66212,
+         7.99754043, 13.9669886, 90.24475036,
+         16.75728834, 1015.645781, 1553.493216
+    };
 
+    static std::array<double, 3> RP, RR;
+    static bool initialized = false;
+
+    if (!initialized) {
+        for (int i = 0; i < 3; ++i) {
+            RP[i] = 1.0 / A[9 + i];   // P(1..3) = A(10..12)
+            RR[i] = 1.0 / A[12 + i];  // R(1..3) = A(13..15)
+        }
+        initialized = true;
+    }
+
+    double bx = 0.0;
+    double by = 0.0;
+    double bz = 0.0;
+
+    int L = 0;
+
+    // Only "perpendicular" symmetry is used
+    for (int i = 0; i < 3; ++i) {
+        double cy_pi = std::cos(y * RP[i]);
+        double sy_pi = std::sin(y * RP[i]);
+
+        for (int k = 0; k < 3; ++k) {
+            double sz_rk = std::sin(z * RR[k]);
+            double cz_rk = std::cos(z * RR[k]);
+
+            double sqpr = std::sqrt(RP[i] * RP[i] + RR[k] * RR[k]);
+            double epr = std::exp(x * sqpr);
+
+            double hx = -sqpr * epr * cy_pi * sz_rk;
+            double hy = RP[i] * epr * sy_pi * sz_rk;
+            double hz = -RR[k] * epr * cy_pi * cz_rk;
+
+            bx += A[L] * hx;
+            by += A[L] * hy;
+            bz += A[L] * hz;
+
+            ++L;
+        }
+    }
+
+    *Bx = bx;
+    *By = by;
+    *Bz = bz;
 }
 
-void t96RingCurrent() {
 
+
+void t96TailRC96(double sps, double x, double y, double z,
+                 double& BXRC, double& BYRC, double& BZRC,
+                 double& BXT2, double& BYT2, double& BZT2,
+                 double& BXT3, double& BYT3, double& BZT3) {
+
+    // ----- DATA blocks converted to std::array -----
+    const std::array<double, 48> ARC = {{
+        -3.087699646, 3.516259114, 18.81380577, -13.95772338,
+        -5.497076303, 0.1712890838, 2.392629189, -2.728020808,
+        -14.79349936, 11.08738083, 4.388174084, 0.02492163197,
+        0.7030375685, -0.7966023165, -3.835041334, 2.642228681,
+        -0.2405352424, -0.7297705678, -0.3680255045, 0.1333685557,
+        2.795140897, -1.078379954, 0.8014028630, 0.1245825565,
+        0.6149982835, -0.2207267314, -4.424578723, 1.730471572,
+        -1.716313926, -0.2306302941, -0.2450342688, 0.08617173961,
+        1.54697858, -0.6569391113, -0.6537525353, 0.2079417515,
+        12.75434981, 11.37659788, 636.4346279, 1.752483754,
+        3.604231143, 12.83078674, 7.412066636, 9.434625736,
+        676.7557193, 1.701162737, 3.580307144, 14.64298662
+    }};
+
+    const std::array<double, 48> ATAIL2 = {{
+        0.8747515218, -0.9116821411, 2.209365387, -2.159059518,
+        -7.059828867, 5.924671028, -1.916935691, 1.996707344,
+        -3.877101873, 3.947666061, 11.38715899, -8.343210833,
+        1.194109867, -1.244316975, 3.73895491, -4.406522465,
+        -20.66884863, 3.020952989, 0.2189908481, -0.09942543549,
+        -0.927225562, 0.1555224669, 0.6994137909, -0.08111721003,
+        -0.7565493881, 0.4686588792, 4.266058082, -0.3717470262,
+        -3.920787807, 0.02298569870, 0.7039506341, -0.5498352719,
+        -6.675140817, 0.8279283559, -2.234773608, -1.622656137,
+        5.187666221, 6.802472048, 39.13543412, 2.784722096,
+        6.979576616, 25.71716760, 4.495005873, 8.068408272,
+        93.47887103, 4.158030104, 9.313492566, 57.18240483
+    }};
+
+    const std::array<double, 48> ATAIL3 = {{
+        -19091.95061, -3011.613928, 20582.16203, 4242.918430,
+        -2377.091102, -1504.820043, 19884.04650, 2725.150544,
+        -21389.04845, -3990.475093, 2401.610097, 1548.171792,
+        -946.5493963, 490.1528941, 986.9156625, -489.3265930,
+        -67.99278499, 8.711175710, -45.15734260, -10.76106500,
+        210.7927312, 11.41764141, -178.0262808, 0.7558830028,
+        339.3806753, 9.904695974, 69.50583193, -118.0271581,
+        22.85935896, 45.91014857, -425.6607164, 15.47250738,
+        118.2988915, 65.58594397, -201.4478068, -14.57062940,
+        19.69877970, 20.30095680, 86.45407420, 22.50403727,
+        23.41617329, 48.48140573, 24.61031329, 123.5395974,
+        223.5367692, 39.50824342, 65.83385762, 266.2948657
+    }};
+
+    // ----- Parameters -----
+    constexpr double RH = 9.0;
+    constexpr double DR = 4.0;
+    constexpr double G = 10.0;
+    constexpr double D0 = 2.0;
+    constexpr double DELTADY = 10.0;
+
+    // ----- Precompute COMMON variables -----
+    double dr2 = DR * DR;
+    double c11 = std::sqrt((1.0 + RH) * (1.0 + RH) + dr2);
+    double c12 = std::sqrt((1.0 - RH) * (1.0 - RH) + dr2);
+    double c1 = c11 - c12;
+    double spsc1 = sps / c1;
+
+    warpData.RPS = 0.5 * (c11 + c12) * sps;
+
+    double R = std::sqrt(x * x + y * y + z * z);
+    double sq1 = std::sqrt((R + RH) * (R + RH) + dr2);
+    double sq2 = std::sqrt((R - RH) * (R - RH) + dr2);
+    double C = sq1 - sq2;
+    double CS = (R + RH) / sq1 - (R - RH) / sq2;
+
+    warpData.SPSS = spsc1 / R * C;
+    warpData.CPSS = std::sqrt(1.0 - warpData.SPSS * warpData.SPSS);
+    warpData.DPSRR = sps / (R * R) * (CS * R - C) / std::sqrt((R * c1) * (R * c1) - (C * sps) * (C * sps));
+
+    double wfac = y / (std::pow(y, 4) + 10000.0);
+    double W = wfac * y * y * y;
+    double WS = 40000.0 * y * wfac * wfac;
+
+    warpData.WARP = G * sps * W;
+
+    warpData.XS = x * warpData.CPSS - z * warpData.SPSS;
+    warpData.ZSWW = z * warpData.CPSS + x * warpData.SPSS;
+    warpData.ZS = warpData.ZSWW + warpData.WARP;
+
+    warpData.DXSX = warpData.CPSS - x * warpData.ZSWW * warpData.DPSRR;
+    warpData.DXSY = -y * warpData.ZSWW * warpData.DPSRR;
+    warpData.DXSZ = -warpData.SPSS - z * warpData.ZSWW * warpData.DPSRR;
+
+    warpData.DZSX = warpData.SPSS + x * warpData.XS * warpData.DPSRR;
+    warpData.DZSY = warpData.XS * y * warpData.DPSRR + G * sps * WS;
+    warpData.DZSZ = warpData.CPSS + warpData.XS * z * warpData.DPSRR;
+
+    warpData.D = D0 + DELTADY * std::pow(y / 20.0, 2);
+    double dddy = DELTADY * y * 0.005;
+
+    warpData.DZETAS = std::sqrt(warpData.ZS * warpData.ZS + warpData.D * warpData.D);
+    warpData.DDZETADX = warpData.ZS * warpData.DXSX / warpData.DZETAS;
+    warpData.DDZETADY = (warpData.ZS * warpData.DZSY + warpData.D * dddy) / warpData.DZETAS;
+    warpData.DDZETADZ = warpData.ZS * warpData.DZSZ / warpData.DZETAS;
+
+    // ----- Compute Fields -----
+    double WX, WY, WZ, HX, HY, HZ;
+
+    t96ShlCar3x3(ARC, x, y, z, sps, WX, WY, WZ);
+    t96RingCurr96(x, y, z, HX, HY, HZ);
+    BXRC = WX + HX;
+    BYRC = WY + HY;
+    BZRC = WZ + HZ;
+
+    t96ShlCar3x3(ATAIL2, x, y, z, sps, WX, WY, WZ);
+    t96TailDisk(x, y, z, HX, HY, HZ);
+    BXT2 = WX + HX;
+    BYT2 = WY + HY;
+    BZT2 = WZ + HZ;
+
+    t96ShlCar3x3(ATAIL3, x, y, z, sps, WX, WY, WZ);
+    double HX87, HZ87;
+    t96Tail87(x, z, &HX87, &HZ87);
+    BXT3 = WX + HX87;
+    BYT3 = WY;
+    BZT3 = WZ + HZ87;
 }
 
-void t96TailDisk() {
 
+
+/**
+ * Computes the magnetic field components (Bx, By, Bz) from the ring current
+ * using space-warping, following Tsyganenko's 1996 approach.
+ *
+ * @param x   GSM X coordinate (Re)
+ * @param y   GSM Y coordinate (Re)
+ * @param z   GSM Z coordinate (Re)
+ * @param Bx  Reference to store X component of magnetic field (nT)
+ * @param By  Reference to store Y component of magnetic field (nT)
+ * @param Bz  Reference to store Z component of magnetic field (nT)
+ */
+void t96RingCurr96(double x, double y, double z, 
+                   double& Bx, double& By, double& Bz) {
+    // Constants from DATA
+    constexpr double D0 = 2.0;
+    constexpr double DELTADX = 0.0;  // Symmetric ring current
+    constexpr double XD = 0.0;
+    constexpr double XLDX = 4.0;
+
+    const std::array<double, 2> F = {569.895366, -1603.386993};
+    const std::array<double, 2> BETA = {2.722188, 3.766875};
+
+    // Compute DZSY manually (no Y-Z warping)
+    double DZSY = warpData.XS * y * warpData.DPSRR;
+
+    double xxd = x - XD;
+    double fdx = 0.5 * (1.0 + xxd / std::sqrt(xxd * xxd + XLDX * XLDX));
+    double dddx = DELTADX * 0.5 * XLDX * XLDX / std::pow(xxd * xxd + XLDX * XLDX, 1.5);
+    double D = D0 + DELTADX * fdx;
+
+    double dzetas = std::sqrt(warpData.ZS * warpData.ZS + D * D);
+    double rhos = std::sqrt(warpData.XS * warpData.XS + y * y);
+
+    double ddzetadx = (warpData.ZS * warpData.DZSX + D * dddx) / dzetas;
+    double ddzetady = warpData.ZS * DZSY / dzetas;
+    double ddzetadz = warpData.ZS * warpData.DZSZ / dzetas;
+
+    double drhosdx, drhosdy, drhosdz;
+
+    if (rhos < 1e-5) {
+        drhosdx = 0.0;
+        drhosdy = (y >= 0.0) ? 1.0 : -1.0;
+        drhosdz = 0.0;
+    } else {
+        drhosdx = warpData.XS * warpData.DXSX / rhos;
+        drhosdy = (warpData.XS * warpData.DXSY + y) / rhos;
+        drhosdz = warpData.XS * warpData.DXSZ / rhos;
+    }
+
+    Bx = 0.0;
+    By = 0.0;
+    Bz = 0.0;
+
+    for (int i = 0; i < 2; ++i) {
+        double beta = BETA[i];
+
+        double s1 = std::sqrt(std::pow(dzetas + beta, 2) + std::pow(rhos + beta, 2));
+        double s2 = std::sqrt(std::pow(dzetas + beta, 2) + std::pow(rhos - beta, 2));
+
+        double ds1ddz = (dzetas + beta) / s1;
+        double ds2ddz = (dzetas + beta) / s2;
+
+        double ds1drhos = (rhos + beta) / s1;
+        double ds2drhos = (rhos - beta) / s2;
+
+        double ds1dx = ds1ddz * ddzetadx + ds1drhos * drhosdx;
+        double ds1dy = ds1ddz * ddzetady + ds1drhos * drhosdy;
+        double ds1dz = ds1ddz * ddzetadz + ds1drhos * drhosdz;
+
+        double ds2dx = ds2ddz * ddzetadx + ds2drhos * drhosdx;
+        double ds2dy = ds2ddz * ddzetady + ds2drhos * drhosdy;
+        double ds2dz = ds2ddz * ddzetadz + ds2drhos * drhosdz;
+
+        double s1ts2 = s1 * s2;
+        double s1ps2 = s1 + s2;
+        double s1ps2sq = s1ps2 * s1ps2;
+
+        double fac1 = std::sqrt(s1ps2sq - 4.0 * beta * beta);
+        double AS = fac1 / (s1ts2 * s1ps2sq);
+
+        double term1 = 1.0 / (s1ts2 * s1ps2 * fac1);
+        double fac2 = AS / s1ps2sq;
+
+        double dasds1 = term1 - fac2 / s1 * (s2 * s2 + s1 * (3.0 * s1 + 4.0 * s2));
+        double dasds2 = term1 - fac2 / s2 * (s1 * s1 + s2 * (3.0 * s2 + 4.0 * s1));
+
+        double dasdx = dasds1 * ds1dx + dasds2 * ds2dx;
+        double dasdy = dasds1 * ds1dy + dasds2 * ds2dy;
+        double dasdz = dasds1 * ds1dz + dasds2 * ds2dz;
+
+        Bx += F[i] * ((2.0 * AS + y * dasdy) * warpData.SPSS - warpData.XS * dasdz
+              + AS * warpData.DPSRR * (y * y * warpData.CPSS + z * warpData.ZS));
+
+        By -= F[i] * y * (AS * warpData.DPSRR * warpData.XS + dasdz * warpData.CPSS + dasdx * warpData.SPSS);
+
+        Bz += F[i] * ((2.0 * AS + y * dasdy) * warpData.CPSS + warpData.XS * dasdx
+              - AS * warpData.DPSRR * (x * warpData.ZS + y * y * warpData.SPSS));
+    }
 }
 
-void t96Tail87() {
 
+/**
+ * Computes the magnetic field components (Bx, By, Bz) from the tail current disk.
+ * This uses space-warping instead of classical shearing (per Tsyganenko & Stern, 1996).
+ *
+ * @param x   GSM X coordinate (Re)
+ * @param y   GSM Y coordinate (Re)
+ * @param z   GSM Z coordinate (Re)
+ * @param Bx  Reference to store X component of magnetic field (nT)
+ * @param By  Reference to store Y component of magnetic field (nT)
+ * @param Bz  Reference to store Z component of magnetic field (nT)
+ */
+void t96TailDisk(double x, double y, double z,
+                 double& Bx, double& By, double& Bz) {
+    constexpr double XSHIFT = 4.5;
+
+    const std::array<double, 4> F = {
+        -745796.7338, 1176470.141, -444610.529, -57508.01028
+    };
+
+    const std::array<double, 4> BETA = {
+        7.925, 8.085, 8.47125, 27.895
+    };
+
+    // Compute RHOS (radial distance in warped coordinates)
+    double dx_shift = warpData.XS - XSHIFT;
+    double rhos = std::sqrt(dx_shift * dx_shift + y * y);
+
+    double drhosdx, drhosdy, drhosdz;
+
+    if (rhos < 1e-5) {
+        drhosdx = 0.0;
+        drhosdy = (y >= 0.0) ? 1.0 : -1.0;
+        drhosdz = 0.0;
+    } else {
+        drhosdx = dx_shift * warpData.DXSX / rhos;
+        drhosdy = (dx_shift * warpData.DXSY + y) / rhos;
+        drhosdz = dx_shift * warpData.DXSZ / rhos;
+    }
+
+    Bx = 0.0;
+    By = 0.0;
+    Bz = 0.0;
+
+    for (int i = 0; i < 4; ++i) {
+        double beta = BETA[i];
+
+        double s1 = std::sqrt(std::pow(warpData.DZETAS + beta, 2) + std::pow(rhos + beta, 2));
+        double s2 = std::sqrt(std::pow(warpData.DZETAS + beta, 2) + std::pow(rhos - beta, 2));
+
+        double ds1ddz = (warpData.DZETAS + beta) / s1;
+        double ds2ddz = (warpData.DZETAS + beta) / s2;
+
+        double ds1drhos = (rhos + beta) / s1;
+        double ds2drhos = (rhos - beta) / s2;
+
+        double ds1dx = ds1ddz * warpData.DDZETADX + ds1drhos * drhosdx;
+        double ds1dy = ds1ddz * warpData.DDZETADY + ds1drhos * drhosdy;
+        double ds1dz = ds1ddz * warpData.DDZETADZ + ds1drhos * drhosdz;
+
+        double ds2dx = ds2ddz * warpData.DDZETADX + ds2drhos * drhosdx;
+        double ds2dy = ds2ddz * warpData.DDZETADY + ds2drhos * drhosdy;
+        double ds2dz = ds2ddz * warpData.DDZETADZ + ds2drhos * drhosdz;
+
+        double s1ts2 = s1 * s2;
+        double s1ps2 = s1 + s2;
+        double s1ps2sq = s1ps2 * s1ps2;
+
+        double fac1 = std::sqrt(s1ps2sq - 4.0 * beta * beta);
+        double AS = fac1 / (s1ts2 * s1ps2sq);
+
+        double term1 = 1.0 / (s1ts2 * s1ps2 * fac1);
+        double fac2 = AS / s1ps2sq;
+
+        double dasds1 = term1 - fac2 / s1 * (s2 * s2 + s1 * (3.0 * s1 + 4.0 * s2));
+        double dasds2 = term1 - fac2 / s2 * (s1 * s1 + s2 * (3.0 * s2 + 4.0 * s1));
+
+        double dasdx = dasds1 * ds1dx + dasds2 * ds2dx;
+        double dasdy = dasds1 * ds1dy + dasds2 * ds2dy;
+        double dasdz = dasds1 * ds1dz + dasds2 * ds2dz;
+
+        Bx += F[i] * ((2.0 * AS + y * dasdy) * warpData.SPSS
+              - dx_shift * dasdz
+              + AS * warpData.DPSRR * (y * y * warpData.CPSS + z * warpData.ZSWW));
+
+        By -= F[i] * y * (AS * warpData.DPSRR * warpData.XS + dasdz * warpData.CPSS + dasdx * warpData.SPSS);
+
+        Bz += F[i] * ((2.0 * AS + y * dasdy) * warpData.CPSS
+              + dx_shift * dasdx
+              - AS * warpData.DPSRR * (x * warpData.ZSWW + y * y * warpData.SPSS));
+    }
 }
 
-void t96CartHarmonicShield() {
 
+/**
+ * Computes the magnetic field components (Bx, Bz) from the 1987 Tsyganenko tail current sheet model.
+ * Uses space-warping via RPS and WARP values from WarpData.
+ *
+ * @param x   GSM X coordinate (Re)
+ * @param z   GSM Z coordinate (Re)
+ * @param Bx  Reference to store X component of magnetic field (nT)
+ * @param Bz  Reference to store Z component of magnetic field (nT)
+ */
+void t96Tail87(double x, double z, double* Bx, double* Bz) {
+    // Constants (equivalent to DATA statements)
+    constexpr double DD   = 3.0;
+    constexpr double HPI  = 1.5707963;  // PI / 2
+    constexpr double RT   = 40.0;
+    constexpr double XN   = -10.0;
+    constexpr double X1   = -1.261;
+    constexpr double X2   = -0.663;
+    constexpr double B0   = 0.391734;
+    constexpr double B1   = 5.89715;
+    constexpr double B2   = 24.6833;
+    constexpr double XN21 = 76.37;
+    constexpr double XNR  = -0.1071;
+    constexpr double ADLN = 0.13238005;
+
+    // Apply space-warping to Z coordinate
+    double ZS = z - warpData.RPS + warpData.WARP;
+    double ZP = z - RT;
+    double ZM = z + RT;
+
+    double XNX = XN - x;
+    double XNX2 = XNX * XNX;
+
+    double XC1 = x - X1;
+    double XC2 = x - X2;
+    double XC22 = XC2 * XC2;
+    double XR2 = XC2 * XNR;
+    double XC12 = XC1 * XC1;
+
+    double D2 = DD * DD;
+
+    double B20 = ZS * ZS + D2;
+    double B2P = ZP * ZP + D2;
+    double B2M = ZM * ZM + D2;
+
+    double B_val  = std::sqrt(B20);
+    double BP     = std::sqrt(B2P);
+    double BM     = std::sqrt(B2M);
+
+    double XA1  = XC12 + B20;
+    double XAP1 = XC12 + B2P;
+    double XAM1 = XC12 + B2M;
+
+    double XA2  = 1.0 / (XC22 + B20);
+    double XAP2 = 1.0 / (XC22 + B2P);
+    double XAM2 = 1.0 / (XC22 + B2M);
+
+    double XNA  = XNX2 + B20;
+    double XNAP = XNX2 + B2P;
+    double XNAM = XNX2 + B2M;
+
+    double F  = B20 - XC22;
+    double FP = B2P - XC22;
+    double FM = B2M - XC22;
+
+    double XLN1  = std::log(XN21 / XNA);
+    double XLNP1 = std::log(XN21 / XNAP);
+    double XLNM1 = std::log(XN21 / XNAM);
+
+    double XLN2  = XLN1 + ADLN;
+    double XLNP2 = XLNP1 + ADLN;
+    double XLNM2 = XLNM1 + ADLN;
+
+    double ALN = 0.25 * (XLNP1 + XLNM1 - 2.0 * XLN1);
+
+    double S0  = (std::atan(XNX / B_val) + HPI) / B_val;
+    double S0P = (std::atan(XNX / BP) + HPI) / BP;
+    double S0M = (std::atan(XNX / BM) + HPI) / BM;
+
+    double S1  = (0.5 * XLN1 + XC1 * S0) / XA1;
+    double S1P = (0.5 * XLNP1 + XC1 * S0P) / XAP1;
+    double S1M = (0.5 * XLNM1 + XC1 * S0M) / XAM1;
+
+    double S2  = (XC2 * XA2 * XLN2 - XNR - F * XA2 * S0) * XA2;
+    double S2P = (XC2 * XAP2 * XLNP2 - XNR - FP * XAP2 * S0P) * XAP2;
+    double S2M = (XC2 * XAM2 * XLNM2 - XNR - FM * XAM2 * S0M) * XAM2;
+
+    double G1  = (B20 * S0  - 0.5 * XC1 * XLN1)  / XA1;
+    double G1P = (B2P * S0P - 0.5 * XC1 * XLNP1) / XAP1;
+    double G1M = (B2M * S0M - 0.5 * XC1 * XLNM1) / XAM1;
+
+    double G2  = ((0.5 * F  * XLN2  + 2.0 * S0  * B20 * XC2) * XA2  + XR2) * XA2;
+    double G2P = ((0.5 * FP * XLNP2 + 2.0 * S0P * B2P * XC2) * XAP2 + XR2) * XAP2;
+    double G2M = ((0.5 * FM * XLNM2 + 2.0 * S0M * B2M * XC2) * XAM2 + XR2) * XAM2;
+
+    *Bx = B0 * (ZS * S0 - 0.5 * (ZP * S0P + ZM * S0M))
+        + B1 * (ZS * S1 - 0.5 * (ZP * S1P + ZM * S1M))
+        + B2 * (ZS * S2 - 0.5 * (ZP * S2P + ZM * S2M));
+
+    *Bz = B0 * ALN + B1 * (G1 - 0.5 * (G1P + G1M)) + B2 * (G2 - 0.5 * (G2P + G2M));
+}
+
+
+/**
+ * Computes shielding magnetic field components (HX, HY, HZ)
+ * using Cartesian harmonics for the Tsyganenko 1996 model.
+ *
+ * @param A     Array of 48 parameters (36 linear coefficients + 12 nonlinear scales)
+ * @param x     GSM X coordinate (Re)
+ * @param y     GSM Y coordinate (Re)
+ * @param z     GSM Z coordinate (Re)
+ * @param sps   Sine of dipole tilt angle (sin(PS))
+ * @param HX    Reference to store X component of shielding field
+ * @param HY    Reference to store Y component of shielding field
+ * @param HZ    Reference to store Z component of shielding field
+ */
+void t96ShlCar3x3(const std::array<double, 48>& A, double x, double y, double z, 
+                  double sps, double& HX, double& HY, double& HZ) {
+    double cps = std::sqrt(1.0 - sps * sps);
+    double s3ps = 4.0 * cps * cps - 1.0;   // Equivalent to sin(3*PS)/sin(PS)
+
+    HX = 0.0;
+    HY = 0.0;
+    HZ = 0.0;
+
+    int L = 0;
+
+    for (int m = 1; m <= 2; ++m) {  // m = symmetry type
+        for (int i = 0; i < 3; ++i) {
+            double P = A[36 + i];
+            double Q = A[42 + i];
+
+            double cypi = std::cos(y / P);
+            double sypi = std::sin(y / P);
+            double cyqi = std::cos(y / Q);
+            double syqi = std::sin(y / Q);
+
+            for (int k = 0; k < 3; ++k) {
+                double R = A[39 + k];
+                double S = A[45 + k];
+
+                double szrk = std::sin(z / R);
+                double czrk = std::cos(z / R);
+                double czsk = std::cos(z / S);
+                double szsk = std::sin(z / S);
+
+                double sqpr = std::sqrt(1.0 / (P * P) + 1.0 / (R * R));
+                double sqqs = std::sqrt(1.0 / (Q * Q) + 1.0 / (S * S));
+
+                double epr = std::exp(x * sqpr);
+                double eqs = std::exp(x * sqqs);
+
+                for (int n = 1; n <= 2; ++n) {
+                    double DX, DY, DZ;
+
+                    if (m == 1) {  // Perpendicular symmetry
+                        if (n == 1) {
+                            DX = -sqpr * epr * cypi * szrk;
+                            DY = epr / P * sypi * szrk;
+                            DZ = -epr / R * cypi * czrk;
+                        } else {
+                            DX *= cps;
+                            DY *= cps;
+                            DZ *= cps;
+                        }
+                    } else {  // Parallel symmetry
+                        if (n == 1) {
+                            DX = -sps * sqqs * eqs * cyqi * czsk;
+                            DY = sps * eqs / Q * syqi * czsk;
+                            DZ = sps * eqs / S * cyqi * szsk;
+                        } else {
+                            DX *= s3ps;
+                            DY *= s3ps;
+                            DZ *= s3ps;
+                        }
+                    }
+
+                    HX += A[L] * DX;
+                    HY += A[L] * DY;
+                    HZ += A[L] * DZ;
+
+                    ++L;
+                }
+            }
+        }
+    }
 }
 
 void t96Region1() {
@@ -179,16 +738,127 @@ void t96DipLoop() {
 
 }
 
-void t96Circle() {
 
+/**
+ * Computes the magnetic field components (Bx, By, Bz) at point (x, y, z)
+ * due to a circular current loop of radius RL.
+ *
+ * Uses the second-order approximation for elliptic integrals 
+ * from Abramowitz and Stegun.
+ *
+ * @param x    X coordinate (Re)
+ * @param y    Y coordinate (Re)
+ * @param z    Z coordinate (Re)
+ * @param rl   Radius of the current loop (Re)
+ * @param Bx   Pointer to store X component of magnetic field (nT)
+ * @param By   Pointer to store Y component of magnetic field (nT)
+ * @param Bz   Pointer to store Z component of magnetic field (nT)
+ */
+void t96Circle(double x, double y, double z, double rl, 
+               double* Bx, double* By, double* Bz) {
+    constexpr double PI = 3.141592654;
+
+    double rho2 = x * x + y * y;
+    double rho = std::sqrt(rho2);
+
+    double r22 = z * z + std::pow(rho + rl, 2);
+    double r2 = std::sqrt(r22);
+
+    double r12 = r22 - 4.0 * rho * rl;
+    double r32 = 0.5 * (r12 + r22);
+
+    double xk2 = 1.0 - r12 / r22;
+    double xk2s = 1.0 - xk2;
+
+    double dl = std::log(1.0 / xk2s);
+
+    // Complete elliptic integral of the first kind approximation (K)
+    double K = 1.38629436112 
+             + xk2s * (0.09666344259 + xk2s * (0.03590092383 
+             + xk2s * (0.03742563713 + xk2s * 0.01451196212))) 
+             + dl * (0.5 + xk2s * (0.12498593597 + xk2s * (0.06880248576 
+             + xk2s * (0.03328355346 + xk2s * 0.00441787012))));
+
+    // Complete elliptic integral of the second kind approximation (E)
+    double E = 1.0 
+             + xk2s * (0.44325141463 + xk2s * (0.0626060122 
+             + xk2s * (0.04757383546 + xk2s * 0.01736506451))) 
+             + dl * xk2s * (0.2499836831 + xk2s * (0.09200180037 
+             + xk2s * (0.04069697526 + xk2s * 0.00526449639)));
+
+    double brho;
+
+    if (rho > 1e-6) {
+        // General case for BRHO
+        brho = z / (rho2 * r2) * (r32 / r12 * E - K);
+    } else {
+        // Special case near axis to avoid singularity
+        brho = PI * rl / r2 * (rl - rho) / r12 * z / (r32 - rho2);
+    }
+
+    *Bx = brho * x;
+    *By = brho * y;
+    *Bz = (K - E * (r32 - 2.0 * rl * rl) / r12) / r2;
 }
+
 
 void t96CrossLoop() {
 
 }
 
-void t96Dipolesxyz() {
 
+/**
+ * Computes the magnetic field components produced by three orthogonal dipoles
+ * aligned along the X, Y, and Z axes, each with moment M = Me.
+ *
+ * @param x     GSM X coordinate (Re)
+ * @param y     GSM Y coordinate (Re)
+ * @param z     GSM Z coordinate (Re)
+ * @param Bxx   Pointer to store Bx component from X-aligned dipole
+ * @param Byx   Pointer to store By component from X-aligned dipole
+ * @param Bzx   Pointer to store Bz component from X-aligned dipole
+ * @param Bxy   Pointer to store Bx component from Y-aligned dipole
+ * @param Byy   Pointer to store By component from Y-aligned dipole
+ * @param Bzy   Pointer to store Bz component from Y-aligned dipole
+ * @param Bxz   Pointer to store Bx component from Z-aligned dipole
+ * @param Byz   Pointer to store By component from Z-aligned dipole
+ * @param Bzz   Pointer to store Bz component from Z-aligned dipole
+ */
+void t96DipXYZ(double x, double y, double z,
+               double* Bxx, double* Byx, double* Bzx,
+               double* Bxy, double* Byy, double* Bzy,
+               double* Bxz, double* Byz, double* Bzz) {
+    
+    double x2 = x * x;
+    double y2 = y * y;
+    double z2 = z * z;
+    double r2 = x2 + y2 + z2;
+
+    if (r2 == 0.0) {
+        // Avoid division by zero if at origin
+        *Bxx = *Byx = *Bzx = 0.0;
+        *Bxy = *Byy = *Bzy = 0.0;
+        *Bxz = *Byz = *Bzz = 0.0;
+        return;
+    }
+
+    double xmr5 = 30574.0 / (r2 * r2 * std::sqrt(r2));  // Dipole scaling factor ~1/R^5
+    double xmr53 = 3.0 * xmr5;
+
+    // Dipole aligned along X-axis
+    *Bxx = xmr5 * (3.0 * x2 - r2);
+    *Byx = xmr53 * x * y;
+    *Bzx = xmr53 * x * z;
+
+    // Dipole aligned along Y-axis
+    *Bxy = *Byx;
+    *Byy = xmr5 * (3.0 * y2 - r2);
+    *Bzy = xmr53 * y * z;
+
+    // Dipole aligned along Z-axis
+    *Bxz = *Bzx;
+    *Byz = *Bzy;
+    *Bzz = xmr5 * (3.0 * z2 - r2);
 }
 
 void t96ConDip() {
