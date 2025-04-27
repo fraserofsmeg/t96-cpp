@@ -1,9 +1,109 @@
 #include "t96.h"
 
-void t96(    int iopt, double *parmod, double psi, 
-            double x, double y, double z,
-            double *Bx, double *By, double *Bz) {
 
+void t96(int iopt, const std::array<double, 10>& parmod, double ps,
+         double x, double y, double z, double& bx, double& by, double& bz) {
+
+    constexpr double pdyn0 = 2.0;
+    constexpr double eps10 = 3630.7;
+    constexpr double a[9] = {1.162, 22.344, 18.50, 2.602, 6.903, 5.287, 0.5790, 0.4462, 0.7850};
+    constexpr double am0 = 70.0, s0 = 1.08, x00 = 5.48, dsig = 0.005;
+    constexpr double delimfx = 20.0, delimfy = 10.0;
+
+    double pdyn = parmod[0];
+    double dst = parmod[1];
+    double byimf = parmod[2];
+    double bzimf = parmod[3];
+
+    double sps = sin(ps);
+
+    double depr = 0.8 * dst - 13.0 * sqrt(pdyn);
+
+    double bt = sqrt(byimf * byimf + bzimf * bzimf);
+    double theta = (byimf == 0.0 && bzimf == 0.0) ? 0.0 : atan2(byimf, bzimf);
+    if (theta <= 0.0) theta += 2 * M_PI;
+
+    double ct = cos(theta);
+    double st = sin(theta);
+    double eps = 718.5 * sqrt(pdyn) * bt * sin(theta / 2.0);
+
+    double facteps = eps / eps10 - 1.0;
+    double factpd = sqrt(pdyn / pdyn0) - 1.0;
+
+    double rcampl = -a[0] * depr;
+    double tampl2 = a[1] + a[2] * factpd + a[3] * facteps;
+    double tampl3 = a[4] + a[5] * factpd;
+    double b1ampl = a[6] + a[7] * facteps;
+    double b2ampl = 20.0 * b1ampl;
+    double reconn = a[8];
+
+    double xappa = pow(pdyn / pdyn0, 0.14);
+    double xappa3 = xappa * xappa * xappa;
+    double ys = y * ct - z * st;
+    double zs = z * ct + y * st;
+
+    double factimf = exp(x / delimfx - (ys / delimfy) * (ys / delimfy));
+
+    double oimfx = 0.0;
+    double oimfy = reconn * byimf * factimf;
+    double oimfz = reconn * bzimf * factimf;
+
+    double rimfampl = reconn * bt;
+
+    double xx = x * xappa;
+    double yy = y * xappa;
+    double zz = z * xappa;
+
+    double x0 = x00 / xappa;
+    double am = am0 / xappa;
+    double rho2 = y * y + z * z;
+    double xmm = am + x - x0;
+    if (xmm < 0.0) xmm = 0.0;
+    double sigma = sqrt((am * am + rho2 + xmm * xmm + sqrt(pow(am * am + rho2 + xmm * xmm, 2) - 4.0 * am * am * xmm * xmm)) / (2.0 * am * am));
+
+    if (sigma < s0 + dsig) {
+        double cfx, cfy, cfz;
+        t96DipShld(ps, xx, yy, zz, cfx, cfy, cfz);
+
+        double bxrc, byrc, bzrc, bxt2, byt2, bzt2, bxt3, byt3, bzt3;
+        t96TailRC96(sps, xx, yy, zz, bxrc, byrc, bzrc, bxt2, byt2, bzt2, bxt3, byt3, bzt3);
+
+        double r1x, r1y, r1z, r2x, r2y, r2z;
+        t96Birk1Tot02(ps, xx, yy, zz, r1x, r1y, r1z);
+        t96Birk2Tot02(ps, xx, yy, zz, r2x, r2y, r2z);
+
+        double rimfx, rimfys, rimfzs;
+        t96Intercon(xx, ys * xappa, zs * xappa, rimfx, rimfys, rimfzs);
+
+        double rimfy = rimfys * ct + rimfzs * st;
+        double rimfz = rimfzs * ct - rimfys * st;
+
+        double fx = cfx * xappa3 + rcampl * bxrc + tampl2 * bxt2 + tampl3 * bxt3 + b1ampl * r1x + b2ampl * r2x + rimfampl * rimfx;
+        double fy = cfy * xappa3 + rcampl * byrc + tampl2 * byt2 + tampl3 * byt3 + b1ampl * r1y + b2ampl * r2y + rimfampl * rimfy;
+        double fz = cfz * xappa3 + rcampl * bzrc + tampl2 * bzt2 + tampl3 * bzt3 + b1ampl * r1z + b2ampl * r2z + rimfampl * rimfz;
+
+        if (sigma < s0 - dsig) {
+            bx = fx;
+            by = fy;
+            bz = fz;
+        } else {
+            double fint = 0.5 * (1.0 - (sigma - s0) / dsig);
+            double fext = 0.5 * (1.0 + (sigma - s0) / dsig);
+
+            double qx, qy, qz;
+            t96Dipole(ps, x, y, z, qx, qy, qz);
+
+            bx = (fx + qx) * fint + oimfx * fext - qx;
+            by = (fy + qy) * fint + oimfy * fext - qy;
+            bz = (fz + qz) * fint + oimfz * fext - qz;
+        }
+    } else {
+        double qx, qy, qz;
+        t96Dipole(ps, x, y, z, qx, qy, qz);
+        bx = oimfx - qx;
+        by = oimfy - qy;
+        bz = oimfz - qz;
+    }
 }
 
 
@@ -730,13 +830,341 @@ void t96ShlCar3x3(const std::array<double, 48>& A, double x, double y, double z,
     }
 }
 
-void t96Region1() {
 
+// ==== Struct Definitions for COMMON Blocks ====
+struct Coord11 {
+    std::array<double, 12> xx1;
+    std::array<double, 12> yy1;
+};
+
+struct RHDR {
+    double rh = 9.0;
+    double dr = 4.0;
+};
+
+struct LoopDip1 {
+    double tilt = 1.00891;
+    std::array<double, 2> xcentre = {2.28397, -5.60831};
+    std::array<double, 2> radius = {1.86106, 7.83281};
+    double dipx = 1.12541;
+    double dipy = 0.945719;
+};
+
+struct Coord21 {
+    std::array<double, 14> xx2;
+    std::array<double, 14> yy2;
+    std::array<double, 14> zz2;
+};
+
+struct DX1 {
+    double dx = -0.16;
+    double scaleIn = 0.08;
+    double scaleOut = 0.4;
+};
+
+// ==== Constants ====
+constexpr double DTET0 = 0.034906;
+constexpr double XLTDAY = 78.0;
+constexpr double XLTNGHT = 70.0;
+constexpr double DEG2RAD = 0.01745329;
+constexpr double PI = 3.141592654;
+
+// Coefficient Arrays
+const double C1[26] = {
+    -0.000911582, -0.00376654, -0.00727423, -0.00270084,
+    -0.00123899, -0.00154387, -0.00340040, -0.0191858,
+    -0.0518979, 0.0635061, 0.440680, -0.396570, 0.00561238,
+     0.00160938, -0.00451229, -0.00251810, -0.00151599,
+    -0.00133665, -0.000962089, -0.0272085, -0.0524319,
+     0.0717024, 0.523439, -0.405015, -89.5587, 23.2806
+ };
+ 
+ const double C2[79] = {
+     6.04133, 0.305415, 0.000606066, 0.000128379, -0.0000179406,
+     1.41714, -27.2586, -4.28833, -1.30675, 35.5607, 8.95792, 0.000961617,
+    -0.000801477, -0.000782795, -1.65242, -16.5242, -5.33798, 0.000424878,
+     0.000331787, -0.000704305, 0.000844342, 0.0000953682, 0.000886271,
+     25.1120, 20.9299, 5.14569, -44.1670, -51.0672, -1.87725, 20.2998,
+     48.7505, -2.97415, 3.35184, -54.2921, -0.838712, -10.5123, 70.7594,
+    -4.94104, 0.000106166, 0.000465791, -0.000193719, 10.8439, -29.7968,
+     8.08068, 0.000463507, -0.0000224475, 0.000177035, -0.000317581,
+    -0.000264487, 0.000102075, 7.71390, 10.1915, -4.99797, -23.1114,
+    -29.2043, 12.2928, 10.9542, 33.6671, -9.3851, 0.000174615, -0.000000789777,
+     0.000686047, 0.000460104, -0.0345216, 0.0221871, 0.110078,
+    -0.0661373, 0.0249201, 0.343978, -0.0000193145, 0.0000493963,
+    -0.000535748, 0.000191833, -0.00100496, -0.00210103, -0.0232195,
+     0.0315335, -0.134320, -0.263222
+ };
+ 
+
+// ==== Main Function ====
+void t96Birk1Tot02(double ps, double x, double y, double z, double* Bx, double* By, double* Bz) {
+    RHDR rhdr;
+    double rh = rhdr.rh;
+    double dr = rhdr.dr;
+    double dr2 = dr * dr;
+
+    // Precompute angles and distances
+    double tNoonN = (90.0 - XLTDAY) * DEG2RAD;
+    double tNoonS = PI - tNoonN;
+    double dTetDn = (XLTDAY - XLTNGHT) * DEG2RAD;
+
+    double sps = std::sin(ps);
+    double r2 = x * x + y * y + z * z;
+    double r = std::sqrt(r2);
+    double r3 = r * r2;
+
+    double rmrh = r - rh;
+    double rprh = r + rh;
+
+    double sqm = std::sqrt(rmrh * rmrh + dr2);
+    double sqp = std::sqrt(rprh * rprh + dr2);
+
+    double C = sqp - sqm;
+    double Q = std::sqrt((rh + 1.0) * (rh + 1.0) + dr2) - std::sqrt((rh - 1.0) * (rh - 1.0) + dr2);
+
+    double spsas = sps / r * C / Q;
+    double cpsas = std::sqrt(1.0 - spsas * spsas);
+
+    double xas = x * cpsas - z * spsas;
+    double zas = x * spsas + z * cpsas;
+
+    double pas = (xas != 0.0 || y != 0.0) ? std::atan2(y, xas) : 0.0;
+    double tas = std::atan2(std::sqrt(xas * xas + y * y), zas);
+    double stas = std::sin(tas);
+    double F = stas / std::pow(stas * stas * stas * stas * stas * stas * (1.0 - r3) + r3, 1.0 / 6.0);
+
+    double tet0 = std::asin(F);
+    if (tas > PI / 2.0) tet0 = PI - tet0;
+
+    double dtet = dTetDn * std::pow(std::sin(pas * 0.5), 2);
+    double tetR1N = tNoonN + dtet;
+    double tetR1S = tNoonS - dtet;
+
+    // ==== Determine Region ====
+    int loc = 0;
+    if (tet0 < tetR1N - DTET0 || tet0 > tetR1S + DTET0) loc = 1;  // High-latitude
+    if (tet0 > tetR1N + DTET0 && tet0 < tetR1S - DTET0) loc = 2;  // Plasma sheet
+    if (tet0 >= tetR1N - DTET0 && tet0 <= tetR1N + DTET0) loc = 3; // North PSBL
+    if (tet0 >= tetR1S - DTET0 && tet0 <= tetR1S + DTET0) loc = 4; // South PSBL
+
+    double bx = 0.0, by = 0.0, bz = 0.0;
+    std::array<double, 4> xi = {x, y, z, ps};
+
+    if (loc == 1) {
+        double D1[3][26];
+        t96DipLoop1(xi, D1);
+        for (int i = 0; i < 26; ++i) {
+            bx += C1[i] * D1[0][i];
+            by += C1[i] * D1[1][i];
+            bz += C1[i] * D1[2][i];
+        }
+    }
+
+    if (loc == 2) {
+        double D2[3][79];
+        t96ConDip1(xi, D2);
+        for (int i = 0; i < 79; ++i) {
+            bx += C2[i] * D2[0][i];
+            by += C2[i] * D2[1][i];
+            bz += C2[i] * D2[2][i];
+        }
+    }
+
+    if (loc == 3 || loc == 4) {
+        bool isNorth = (loc == 3);
+        double t01 = isNorth ? tetR1N - DTET0 : tetR1S - DTET0;
+        double t02 = isNorth ? tetR1N + DTET0 : tetR1S + DTET0;
+
+        double sqr = std::sqrt(r);
+        double st01as = sqr / std::pow(r3 + 1.0 / std::pow(std::sin(t01), 6) - 1.0, 1.0 / 6.0);
+        double st02as = sqr / std::pow(r3 + 1.0 / std::pow(std::sin(t02), 6) - 1.0, 1.0 / 6.0);
+        double ct01as = (isNorth ? 1 : -1) * std::sqrt(1.0 - st01as * st01as);
+        double ct02as = (isNorth ? 1 : -1) * std::sqrt(1.0 - st02as * st02as);
+
+        double xas1 = r * st01as * std::cos(pas);
+        double y1 = r * st01as * std::sin(pas);
+        double zas1 = r * ct01as;
+        double x1 = xas1 * cpsas + zas1 * spsas;
+        double z1 = -xas1 * spsas + zas1 * cpsas;
+
+        double xas2 = r * st02as * std::cos(pas);
+        double y2 = r * st02as * std::sin(pas);
+        double zas2 = r * ct02as;
+        double x2 = xas2 * cpsas + zas2 * spsas;
+        double z2 = -xas2 * spsas + zas2 * cpsas;
+
+        double bx1 = 0.0, by1 = 0.0, bz1 = 0.0;
+        double bx2 = 0.0, by2 = 0.0, bz2 = 0.0;
+
+        xi = {x1, y1, z1, ps};
+        if (isNorth) {
+            double D1[3][26];
+            t96DipLoop1(xi, D1);
+            for (int i = 0; i < 26; ++i) {
+                bx1 += C1[i] * D1[0][i];
+                by1 += C1[i] * D1[1][i];
+                bz1 += C1[i] * D1[2][i];
+            }
+        } else {
+            double D2[3][79];
+            t96ConDip1(xi, D2);
+            for (int i = 0; i < 79; ++i) {
+                bx1 += C2[i] * D2[0][i];
+                by1 += C2[i] * D2[1][i];
+                bz1 += C2[i] * D2[2][i];
+            }
+        }
+
+        xi = {x2, y2, z2, ps};
+        if (isNorth) {
+            double D2[3][79];
+            t96ConDip1(xi, D2);
+            for (int i = 0; i < 79; ++i) {
+                bx2 += C2[i] * D2[0][i];
+                by2 += C2[i] * D2[1][i];
+                bz2 += C2[i] * D2[2][i];
+            }
+        } else {
+            double D1[3][26];
+            t96DipLoop1(xi, D1);
+            for (int i = 0; i < 26; ++i) {
+                bx2 += C1[i] * D1[0][i];
+                by2 += C1[i] * D1[1][i];
+                bz2 += C1[i] * D1[2][i];
+            }
+        }
+
+        double ss = std::sqrt((x2 - x1)*(x2 - x1) + (y2 - y1)*(y2 - y1) + (z2 - z1)*(z2 - z1));
+        double ds = std::sqrt((x - x1)*(x - x1) + (y - y1)*(y - y1) + (z - z1)*(z - z1));
+        double frac = ds / ss;
+
+        bx = bx1 * (1.0 - frac) + bx2 * frac;
+        by = by1 * (1.0 - frac) + by2 * frac;
+        bz = bz1 * (1.0 - frac) + bz2 * frac;
+    }
+
+    // Add shielding field
+    double bsx, bsy, bsz;
+    t96Birk1Shield(ps, x, y, z, &bsx, &bsy, &bsz);
+
+    *Bx = bx + bsx;
+    *By = by + bsy;
+    *Bz = bz + bsz;
 }
 
-void t96DipLoop() {
 
+
+// Assuming these structs are globally available or passed in
+extern Coord11 coord11;
+extern LoopDip1 loopDip1;
+extern RHDR rhdr;
+
+
+/**
+ * Calculates derivatives of dependent variables with respect to linear
+ * model parameters for the Region 1 field model.
+ *
+ * @param xi   Input vector {X, Y, Z, PS}
+ * @param D    Output 3x26 array of computed derivatives
+ */
+void t96DipLoop1(const std::array<double, 4>& xi, double D[3][26]) {
+    double X = xi[0];
+    double Y = xi[1];
+    double Z = xi[2];
+    double PS = xi[3];
+    double SPS = std::sin(PS);
+
+    double RH = rhdr.rh;
+    double DR = rhdr.dr;
+
+    // Handle 12 dipoles
+    for (int i = 0; i < 12; ++i) {
+        double xd_orig = coord11.xx1[i] * loopDip1.dipx;
+        double yd_orig = coord11.yy1[i] * loopDip1.dipy;
+        double r2 = xd_orig * xd_orig + yd_orig * yd_orig;
+        double r = std::sqrt(r2);
+
+        double sqm = std::sqrt((r - RH) * (r - RH) + DR * DR);
+        double sqp = std::sqrt((r + RH) * (r + RH) + DR * DR);
+        double C = sqp - sqm;
+        double Q = std::sqrt((RH + 1.0) * (RH + 1.0) + DR * DR) - std::sqrt((RH - 1.0) * (RH - 1.0) + DR * DR);
+        double SPSAS = SPS / r * C / Q;
+        double CPSAS = std::sqrt(1.0 - SPSAS * SPSAS);
+
+        double XD = xd_orig * CPSAS;
+        double YD = yd_orig;
+        double ZD = -xd_orig * SPSAS;
+
+        double BX1X, BY1X, BZ1X, BX1Y, BY1Y, BZ1Y, BX1Z, BY1Z, BZ1Z;
+        double BX2X = 0, BY2X = 0, BZ2X = 0, BX2Z = 0, BY2Z = 0, BZ2Z = 0;
+
+        t96DipXYZ(X - XD, Y - YD, Z - ZD, 
+                  &BX1X, &BY1X, &BZ1X, &BX1Y, &BY1Y, &BZ1Y, &BX1Z, &BY1Z, &BZ1Z);
+
+        if (std::abs(YD) > 1e-10) {
+            t96DipXYZ(X - XD, Y + YD, Z - ZD, 
+                      &BX2X, &BY2X, &BZ2X, &BX2Y, &BY2Y, &BZ2Y, &BX2Z, &BY2Z, &BZ2Z);
+        }
+
+        D[0][i]     = BX1Z + BX2Z;
+        D[1][i]     = BY1Z + BY2Z;
+        D[2][i]     = BZ1Z + BZ2Z;
+
+        D[0][i+12]  = (BX1X + BX2X) * SPS;
+        D[1][i+12]  = (BY1X + BY2X) * SPS;
+        D[2][i+12]  = (BZ1X + BZ2X) * SPS;
+    }
+
+    // Handle Octagonal Double Loop 1
+    {
+        double r2 = std::pow(loopDip1.xcentre[0] + loopDip1.radius[0], 2);
+        double r = std::sqrt(r2);
+
+        double sqm = std::sqrt((r - RH) * (r - RH) + DR * DR);
+        double sqp = std::sqrt((r + RH) * (r + RH) + DR * DR);
+        double C = sqp - sqm;
+        double Q = std::sqrt((RH + 1.0) * (RH + 1.0) + DR * DR) - std::sqrt((RH - 1.0) * (RH - 1.0) + DR * DR);
+        double SPSAS = SPS / r * C / Q;
+        double CPSAS = std::sqrt(1.0 - SPSAS * SPSAS);
+
+        double XOCT1 = X * CPSAS - Z * SPSAS;
+        double YOCT1 = Y;
+        double ZOCT1 = X * SPSAS + Z * CPSAS;
+
+        double BXOCT1, BYOCT1, BZOCT1;
+        t96CrossLoop(XOCT1, YOCT1, ZOCT1, &BXOCT1, &BYOCT1, &BZOCT1, loopDip1.xcentre[0], loopDip1.radius[0], loopDip1.tilt);
+
+        D[0][24] = BXOCT1 * CPSAS + BZOCT1 * SPSAS;
+        D[1][24] = BYOCT1;
+        D[2][24] = -BXOCT1 * SPSAS + BZOCT1 * CPSAS;
+    }
+
+    // Handle Circular Loop 2
+    {
+        double r2 = std::pow(loopDip1.radius[1] - loopDip1.xcentre[1], 2);
+        double r = std::sqrt(r2);
+
+        double sqm = std::sqrt((r - RH) * (r - RH) + DR * DR);
+        double sqp = std::sqrt((r + RH) * (r + RH) + DR * DR);
+        double C = sqp - sqm;
+        double Q = std::sqrt((RH + 1.0) * (RH + 1.0) + DR * DR) - std::sqrt((RH - 1.0) * (RH - 1.0) + DR * DR);
+        double SPSAS = SPS / r * C / Q;
+        double CPSAS = std::sqrt(1.0 - SPSAS * SPSAS);
+
+        double XOCT2 = X * CPSAS - Z * SPSAS - loopDip1.xcentre[1];
+        double YOCT2 = Y;
+        double ZOCT2 = X * SPSAS + Z * CPSAS;
+
+        double BX, BY, BZ;
+        t96Circle(XOCT2, YOCT2, ZOCT2, loopDip1.radius[1], &BX, &BY, &BZ);
+
+        D[0][25] = BX * CPSAS + BZ * SPSAS;
+        D[1][25] = BY;
+        D[2][25] = -BX * SPSAS + BZ * CPSAS;
+    }
 }
+
 
 
 /**
@@ -802,8 +1230,45 @@ void t96Circle(double x, double y, double z, double rl,
 }
 
 
-void t96CrossLoop() {
+/**
+ * Computes the magnetic field components (Bx, By, Bz) from a pair of
+ * inclined circular current loops ("crossed loops").
+ *
+ * @param x   X coordinate of the point (Re)
+ * @param y   Y coordinate of the point (Re)
+ * @param z   Z coordinate of the point (Re)
+ * @param xc  Shift of the loop center along X-axis (Re)
+ * @param rl  Radius of the loops (Re)
+ * @param al  Inclination angle to the equatorial plane (radians)
+ * @param Bx  Pointer to store X component of the magnetic field (nT)
+ * @param By  Pointer to store Y component of the magnetic field (nT)
+ * @param Bz  Pointer to store Z component of the magnetic field (nT)
+ */
+void t96CrossLoop(double x, double y, double z, 
+                  double* Bx, double* By, double* Bz, 
+                  double xc, double rl, double al) {
+    double cal = std::cos(al);
+    double sal = std::sin(al);
 
+    // Rotate coordinates for the first loop
+    double y1 = y * cal - z * sal;
+    double z1 = y * sal + z * cal;
+
+    // Rotate coordinates for the second loop
+    double y2 = y * cal + z * sal;
+    double z2 = -y * sal + z * cal;
+
+    // Field components from each loop
+    double bx1, by1, bz1;
+    double bx2, by2, bz2;
+
+    t96Circle(x - xc, y1, z1, rl, &bx1, &by1, &bz1);
+    t96Circle(x - xc, y2, z2, rl, &bx2, &by2, &bz2);
+
+    // Combine contributions from both loops
+    *Bx = bx1 + bx2;
+    *By = (by1 + by2) * cal + (bz1 - bz2) * sal;
+    *Bz = -(by1 - by2) * sal + (bz1 + bz2) * cal;
 }
 
 
@@ -861,9 +1326,151 @@ void t96DipXYZ(double x, double y, double z,
     *Bzz = xmr5 * (3.0 * z2 - r2);
 }
 
-void t96ConDip() {
 
+
+// Assuming these structs are declared elsewhere
+extern struct DX1 { double dx, scalein, scaleout; } dx1;
+extern struct Coord21 { std::array<double,14> xx, yy, zz; } coord21;
+
+
+/**
+ * Calculates model derivatives with respect to linear parameters for
+ * conical harmonics and dipole sources.
+ *
+ * @param xi   Input vector {X, Y, Z, PS}
+ * @param D    Output 3x79 array of computed derivatives
+ */
+void t96ConDip1(const std::array<double, 4>& xi, double D[3][79]) {
+    double X = xi[0];
+    double Y = xi[1];
+    double Z = xi[2];
+    double PS = xi[3];
+    double SPS = std::sin(PS);
+    double CPS = std::cos(PS);
+
+    double XSM = X * CPS - Z * SPS - dx1.dx;
+    double ZSM = Z * CPS + X * SPS;
+    double RO2 = XSM * XSM + Y * Y;
+    double RO = std::sqrt(RO2);
+
+    std::array<double, 5> CF, SF;
+    CF[0] = XSM / RO;
+    SF[0] = Y / RO;
+
+    // Generate harmonics
+    for (int m = 1; m < 5; ++m) {
+        CF[m] = CF[m-1] * CF[0] - SF[m-1] * SF[0];
+        SF[m] = SF[m-1] * CF[0] + CF[m-1] * SF[0];
+    }
+
+    double R2 = RO2 + ZSM * ZSM;
+    double R = std::sqrt(R2);
+    double C = ZSM / R;
+    double S = RO / R;
+    double CH = std::sqrt(0.5 * (1.0 + C));
+    double SH = std::sqrt(0.5 * (1.0 - C));
+    double TNH = SH / CH;
+    double CNH = 1.0 / TNH;
+
+    // Conical harmonics contribution
+    for (int m = 1; m <= 5; ++m) {
+        double BT = m * CF[m-1] / (R * S) * (std::pow(TNH, m) + std::pow(CNH, m));
+        double BF = -0.5 * m * SF[m-1] / R * (std::pow(TNH, m-1) / (CH * CH) - std::pow(CNH, m-1) / (SH * SH));
+
+        double BXSM = BT * C * CF[0] - BF * SF[0];
+        double BY = BT * C * SF[0] + BF * CF[0];
+        double BZSM = -BT * S;
+
+        D[0][m-1] = BXSM * CPS + BZSM * SPS;
+        D[1][m-1] = BY;
+        D[2][m-1] = -BXSM * SPS + BZSM * CPS;
+    }
+
+    // Dipole contributions for first 9 positions
+    for (int i = 0; i < 9; ++i) {
+        double scale = (i == 2 || i == 4 || i == 5) ? dx1.scalein : dx1.scaleout;
+        double XD = coord21.xx[i] * scale;
+        double YD = coord21.yy[i] * scale;
+        double ZD = coord21.zz[i];
+
+        double BX1X, BY1X, BZ1X, BX1Y, BY1Y, BZ1Y, BX1Z, BY1Z, BZ1Z;
+        double BX2X, BY2X, BZ2X, BX2Y, BY2Y, BZ2Y, BX2Z, BY2Z, BZ2Z;
+        double BX3X, BY3X, BZ3X, BX3Y, BY3Y, BZ3Y, BX3Z, BY3Z, BZ3Z;
+        double BX4X, BY4X, BZ4X, BX4Y, BY4Y, BZ4Y, BX4Z, BY4Z, BZ4Z;
+
+        t96DipXYZ(XSM - XD, Y - YD, ZSM - ZD, &BX1X, &BY1X, &BZ1X, &BX1Y, &BY1Y, &BZ1Y, &BX1Z, &BY1Z, &BZ1Z);
+        t96DipXYZ(XSM - XD, Y + YD, ZSM - ZD, &BX2X, &BY2X, &BZ2X, &BX2Y, &BY2Y, &BZ2Y, &BX2Z, &BY2Z, &BZ2Z);
+        t96DipXYZ(XSM - XD, Y - YD, ZSM + ZD, &BX3X, &BY3X, &BZ3X, &BX3Y, &BY3Y, &BZ3Y, &BX3Z, &BY3Z, &BZ3Z);
+        t96DipXYZ(XSM - XD, Y + YD, ZSM + ZD, &BX4X, &BY4X, &BZ4X, &BX4Y, &BY4Y, &BZ4Y, &BX4Z, &BY4Z, &BZ4Z);
+
+        int IX = i * 3 + 3;
+        int IY = IX + 1;
+        int IZ = IY + 1;
+
+        D[0][IX] = (BX1X + BX2X - BX3X - BX4X) * CPS + (BZ1X + BZ2X - BZ3X - BZ4X) * SPS;
+        D[1][IX] = BY1X + BY2X - BY3X - BY4X;
+        D[2][IX] = (BZ1X + BZ2X - BZ3X - BZ4X) * CPS - (BX1X + BX2X - BX3X - BX4X) * SPS;
+
+        D[0][IY] = (BX1Y - BX2Y - BX3Y + BX4Y) * CPS + (BZ1Y - BZ2Y - BZ3Y + BZ4Y) * SPS;
+        D[1][IY] = BY1Y - BY2Y - BY3Y + BY4Y;
+        D[2][IY] = (BZ1Y - BZ2Y - BZ3Y + BZ4Y) * CPS - (BX1Y - BX2Y - BX3Y + BX4Y) * SPS;
+
+        D[0][IZ] = (BX1Z + BX2Z + BX3Z + BX4Z) * CPS + (BZ1Z + BZ2Z + BZ3Z + BZ4Z) * SPS;
+        D[1][IZ] = BY1Z + BY2Z + BY3Z + BY4Z;
+        D[2][IZ] = (BZ1Z + BZ2Z + BZ3Z + BZ4Z) * CPS - (BX1Z + BX2Z + BX3Z + BX4Z) * SPS;
+
+        // Multiply by SPS for next set
+        IX += 27;
+        IY += 27;
+        IZ += 27;
+
+        D[0][IX] = SPS * ((BX1X + BX2X + BX3X + BX4X) * CPS + (BZ1X + BZ2X + BZ3X + BZ4X) * SPS);
+        D[1][IX] = SPS * (BY1X + BY2X + BY3X + BY4X);
+        D[2][IX] = SPS * ((BZ1X + BZ2X + BZ3X + BZ4X) * CPS - (BX1X + BX2X + BX3X + BX4X) * SPS);
+
+        D[0][IY] = SPS * ((BX1Y - BX2Y + BX3Y - BX4Y) * CPS + (BZ1Y - BZ2Y + BZ3Y - BZ4Y) * SPS);
+        D[1][IY] = SPS * (BY1Y - BY2Y + BY3Y - BY4Y);
+        D[2][IY] = SPS * ((BZ1Y - BZ2Y + BZ3Y - BZ4Y) * CPS - (BX1Y - BX2Y + BX3Y - BX4Y) * SPS);
+
+        D[0][IZ] = SPS * ((BX1Z + BX2Z - BX3Z - BX4Z) * CPS + (BZ1Z + BZ2Z - BZ3Z - BZ4Z) * SPS);
+        D[1][IZ] = SPS * (BY1Z + BY2Z - BY3Z - BY4Z);
+        D[2][IZ] = SPS * ((BZ1Z + BZ2Z - BZ3Z - BZ4Z) * CPS - (BX1Z + BX2Z - BX3Z - BX4Z) * SPS);
+    }
+
+    // Last 5 dipoles
+    for (int i = 0; i < 5; ++i) {
+        double ZD = coord21.zz[i + 9];
+
+        double BX1X, BY1X, BZ1X, BX1Y, BY1Y, BZ1Y, BX1Z, BY1Z, BZ1Z;
+        double BX2X, BY2X, BZ2X, BX2Y, BY2Y, BZ2Y, BX2Z, BY2Z, BZ2Z;
+
+        t96DipXYZ(XSM, Y, ZSM - ZD, &BX1X, &BY1X, &BZ1X, &BX1Y, &BY1Y, &BZ1Y, &BX1Z, &BY1Z, &BZ1Z);
+        t96DipXYZ(XSM, Y, ZSM + ZD, &BX2X, &BY2X, &BZ2X, &BX2Y, &BY2Y, &BZ2Y, &BX2Z, &BY2Z, &BZ2Z);
+
+        int IX = 58 + (i + 1) * 2;
+        int IZ = IX + 1;
+
+        D[0][IX] = (BX1X - BX2X) * CPS + (BZ1X - BZ2X) * SPS;
+        D[1][IX] = BY1X - BY2X;
+        D[2][IX] = (BZ1X - BZ2X) * CPS - (BX1X - BX2X) * SPS;
+
+        D[0][IZ] = (BX1Z + BX2Z) * CPS + (BZ1Z + BZ2Z) * SPS;
+        D[1][IZ] = BY1Z + BY2Z;
+        D[2][IZ] = (BZ1Z + BZ2Z) * CPS - (BX1Z + BX2Z) * SPS;
+
+        IX += 10;
+        IZ += 10;
+
+        D[0][IX] = SPS * ((BX1X + BX2X) * CPS + (BZ1X + BZ2X) * SPS);
+        D[1][IX] = SPS * (BY1X + BY2X);
+        D[2][IX] = SPS * ((BZ1X + BZ2X) * CPS - (BX1X + BX2X) * SPS);
+
+        D[0][IZ] = SPS * ((BX1Z - BX2Z) * CPS + (BZ1Z - BZ2Z) * SPS);
+        D[1][IZ] = SPS * (BY1Z - BY2Z);
+        D[2][IZ] = SPS * ((BZ1Z - BZ2Z) * CPS - (BX1Z - BX2Z) * SPS);
+    }
 }
+
 
 
 /**
@@ -984,12 +1591,215 @@ void t96Birk1Shield(double ps, double x, double y, double z,
     }
 }
 
-void t96Region2() {
+/**
+ * Combines the magnetic field contributions from the Region 2 Birkeland 
+ * current shielding field and the Region 2 field itself.
+ *
+ * @param ps   Dipole tilt angle in radians
+ * @param x    GSM X coordinate (Re)
+ * @param y    GSM Y coordinate (Re)
+ * @param z    GSM Z coordinate (Re)
+ * @param Bx   Pointer to store X component of the magnetic field (nT)
+ * @param By   Pointer to store Y component of the magnetic field (nT)
+ * @param Bz   Pointer to store Z component of the magnetic field (nT)
+ */
+void t96Birk2Tot_02(double ps, double x, double y, double z,
+                    double* Bx, double* By, double* Bz) 
+{
+    double Wx, Wy, Wz;
+    double Hx, Hy, Hz;
 
+    // Compute shielding field contribution
+    t96Birk2Shield(x, y, z, ps, &Wx, &Wy, &Wz);
+
+    // Compute Region 2 Birkeland current contribution
+    t96R2Birk(x, y, z, ps, &Hx, &Hy, &Hz);
+
+    // Sum both contributions
+    *Bx = Wx + Hx;
+    *By = Wy + Hy;
+    *Bz = Wz + Hz;
+
+    // Debug print if needed
+    // std::cout << "Wx=" << Wx << " Wy=" << Wy << " Wz=" << Wz 
+    //           << " Hx=" << Hx << " Hy=" << Hy << " Hz=" << Hz << std::endl;
 }
 
-void t96Region2Shield() {
 
+
+/**
+ * Computes the Region 2 Birkeland current shielding magnetic field components.
+ *
+ * @param x    GSM X coordinate (Re)
+ * @param y    GSM Y coordinate (Re)
+ * @param z    GSM Z coordinate (Re)
+ * @param ps   Dipole tilt angle in radians
+ * @param Hx   Pointer to store X component of shielding field (nT)
+ * @param Hy   Pointer to store Y component of shielding field (nT)
+ * @param Hz   Pointer to store Z component of shielding field (nT)
+ */
+void t96Birk2Shield(double x, double y, double z, double ps,
+                    double* Hx, double* Hy, double* Hz)
+{
+    static const std::array<double, 24> A = {
+        -111.6371348, 124.5402702, 110.3735178, -122.0095905,
+        111.9448247, -129.1957743, -110.7586562, 126.5649012,
+        -0.7865034384, -0.2483462721, 0.8026023894, 0.2531397188,
+        10.72890902, 0.8483902118, -10.96884315, -0.8583297219,
+        13.85650567, 14.90554500, 10.21914434, 10.09021632,
+        6.340382460, 14.40432686, 12.71023437, 12.83966657
+    };
+
+    std::array<double, 2> P = { A[16], A[17] };
+    std::array<double, 2> R = { A[18], A[19] };
+    std::array<double, 2> Q = { A[20], A[21] };
+    std::array<double, 2> S = { A[22], A[23] };
+
+    double CPS = std::cos(ps);
+    double SPS = std::sin(ps);
+    double S3PS = 4.0 * CPS * CPS - 1.0;  // Equivalent to sin(3*PS)/sin(PS)
+
+    double hx = 0.0, hy = 0.0, hz = 0.0;
+    int L = 0;
+
+    for (int m = 0; m < 2; ++m) {  // m = 0: Perpendicular, m = 1: Parallel symmetry
+        for (int i = 0; i < 2; ++i) {
+            double CYPI = std::cos(y / P[i]);
+            double CYQI = std::cos(y / Q[i]);
+            double SYPI = std::sin(y / P[i]);
+            double SYQI = std::sin(y / Q[i]);
+
+            for (int k = 0; k < 2; ++k) {
+                double SZRK = std::sin(z / R[k]);
+                double CZSK = std::cos(z / S[k]);
+                double CZRK = std::cos(z / R[k]);
+                double SZSK = std::sin(z / S[k]);
+
+                double SQPR = std::sqrt(1.0 / (P[i] * P[i]) + 1.0 / (R[k] * R[k]));
+                double SQQS = std::sqrt(1.0 / (Q[i] * Q[i]) + 1.0 / (S[k] * S[k]));
+
+                double EPR = std::exp(x * SQPR);
+                double EQS = std::exp(x * SQQS);
+
+                for (int n = 0; n < 2; ++n) {
+                    double DX, DY, DZ;
+
+                    if (m == 0) {  // Perpendicular symmetry
+                        if (n == 0) {
+                            DX = -SQPR * EPR * CYPI * SZRK;
+                            DY = EPR / P[i] * SYPI * SZRK;
+                            DZ = -EPR / R[k] * CYPI * CZRK;
+                        } else {
+                            DX *= CPS;
+                            DY *= CPS;
+                            DZ *= CPS;
+                        }
+                    } else {  // Parallel symmetry
+                        if (n == 0) {
+                            DX = -SPS * SQQS * EQS * CYQI * CZSK;
+                            DY = SPS * EQS / Q[i] * SYQI * CZSK;
+                            DZ = SPS * EQS / S[k] * CYQI * SZSK;
+                        } else {
+                            DX *= S3PS;
+                            DY *= S3PS;
+                            DZ *= S3PS;
+                        }
+                    }
+
+                    hx += A[L] * DX;
+                    hy += A[L] * DY;
+                    hz += A[L] * DZ;
+                    L++;
+                }
+            }
+        }
+    }
+
+    *Hx = hx;
+    *Hy = hy;
+    *Hz = hz;
+}
+
+
+/**
+ * Computes the Region 2 Birkeland current / partial ring current magnetic field (no shielding).
+ *
+ * @param x     GSM X coordinate (Re)
+ * @param y     GSM Y coordinate (Re)
+ * @param z     GSM Z coordinate (Re)
+ * @param ps    Dipole tilt angle in radians
+ * @param Bx    Pointer to store X component of magnetic field (nT)
+ * @param By    Pointer to store Y component of magnetic field (nT)
+ * @param Bz    Pointer to store Z component of magnetic field (nT)
+ */
+void t96R2Birk(double x, double y, double z, double ps,
+               double* Bx, double* By, double* Bz)
+{
+    static double prev_ps = 10.0;
+    static double cps = 0.0;
+    static double sps = 0.0;
+
+    const double DELARG  = 0.030;
+    const double DELARG1 = 0.015;
+
+    // Update cached sine and cosine if PS changes
+    if (std::abs(prev_ps - ps) > 1e-10) {
+        prev_ps = ps;
+        cps = std::cos(ps);
+        sps = std::sin(ps);
+    }
+
+    // Rotate to SM coordinates
+    double xsm = x * cps - z * sps;
+    double zsm = z * cps + x * sps;
+
+    double xks = xksi(xsm, y, zsm);
+
+    double bxsm = 0.0, by = 0.0, bzsm = 0.0;
+
+    if (xks < -(DELARG + DELARG1)) {
+        t96R2Outer(xsm, y, zsm, &bxsm, &by, &bzsm);
+        bxsm *= -0.02;
+        by   *= -0.02;
+        bzsm *= -0.02;
+    }
+    else if (xks >= -(DELARG + DELARG1) && xks < -DELARG + DELARG1) {
+        double bxsm1, by1, bzsm1, bxsm2, by2, bzsm2;
+        t96R2Outer(xsm, y, zsm, &bxsm1, &by1, &bzsm1);
+        t96R2Sheet(xsm, y, zsm, &bxsm2, &by2, &bzsm2);
+        double f2 = -0.02 * tksi(xks, -DELARG, DELARG1);
+        double f1 = -0.02 - f2;
+        bxsm = bxsm1 * f1 + bxsm2 * f2;
+        by   = by1   * f1 + by2   * f2;
+        bzsm = bzsm1 * f1 + bzsm2 * f2;
+    }
+    else if (xks >= -DELARG + DELARG1 && xks < DELARG - DELARG1) {
+        t96R2Sheet(xsm, y, zsm, &bxsm, &by, &bzsm);
+        bxsm *= -0.02;
+        by   *= -0.02;
+        bzsm *= -0.02;
+    }
+    else if (xks >= DELARG - DELARG1 && xks < DELARG + DELARG1) {
+        double bxsm1, by1, bzsm1, bxsm2, by2, bzsm2;
+        t96R2Inner(xsm, y, zsm, &bxsm1, &by1, &bzsm1);
+        t96R2Sheet(xsm, y, zsm, &bxsm2, &by2, &bzsm2);
+        double f1 = -0.02 * tksi(xks, DELARG, DELARG1);
+        double f2 = -0.02 - f1;
+        bxsm = bxsm1 * f1 + bxsm2 * f2;
+        by   = by1   * f1 + by2   * f2;
+        bzsm = bzsm1 * f1 + bzsm2 * f2;
+    }
+    else if (xks >= DELARG + DELARG1) {
+        t96R2Inner(xsm, y, zsm, &bxsm, &by, &bzsm);
+        bxsm *= -0.02;
+        by   *= -0.02;
+        bzsm *= -0.02;
+    }
+
+    // Rotate back from SM to GSM coordinates
+    *Bx = bxsm * cps + bzsm * sps;
+    *Bz = bzsm * cps - bxsm * sps;
+    *By = by;
 }
 
 /**
@@ -1148,13 +1958,146 @@ void t96DipDistr(double x, double y, double z, double* Bx, double* By, double* B
     }
 }
 
-void t96Region2Outer() {
 
+/**
+ * Calculates the magnetic field components for the outer Region 2 Birkeland current system.
+ *
+ * @param x   GSM X coordinate (Re)
+ * @param y   GSM Y coordinate (Re)
+ * @param z   GSM Z coordinate (Re)
+ * @param Bx  Pointer to store X component of magnetic field (nT)
+ * @param By  Pointer to store Y component of magnetic field (nT)
+ * @param Bz  Pointer to store Z component of magnetic field (nT)
+ */
+void t96R2Outer(double x, double y, double z, double* Bx, double* By, double* Bz) {
+    // Linear coefficients
+    const std::array<double, 5> PL = {-34.105, -2.00019, 628.639, 73.4847, 12.5162};
+
+    // Non-linear parameters for loops
+    const std::array<double, 17> PN = {
+        0.55, 0.694, 0.0031,   // Crossed loop 1
+        1.55, 2.8, 0.1375,     // Crossed loop 2
+       -0.7,  0.2, 0.9625,     // Crossed loop 3
+       -2.994, 2.925,          // Circle loop (X-shift, radius)
+       -1.775, 4.3, -0.275,    // 4-loop system params
+        2.7, 0.4312, 1.55
+    };
+
+    double dbx1, dby1, dbz1;
+    double dbx2, dby2, dbz2;
+    double dbx3, dby3, dbz3;
+    double dbx4, dby4, dbz4;
+    double dbx5, dby5, dbz5;
+
+    // Three pairs of crossed loops
+    t96CrossLoop(x, y, z, &dbx1, &dby1, &dbz1, PN[0], PN[1], PN[2]);
+    t96CrossLoop(x, y, z, &dbx2, &dby2, &dbz2, PN[3], PN[4], PN[5]);
+    t96CrossLoop(x, y, z, &dbx3, &dby3, &dbz3, PN[6], PN[7], PN[8]);
+
+    // Equatorial loop on the nightside
+    t96Circle(x - PN[9], y, z, PN[10], &dbx4, &dby4, &dbz4);
+
+    // 4-loop system on the nightside
+    t96Loops4(x, y, z, &dbx5, &dby5, &dbz5, PN[11], PN[12], PN[13], PN[14], PN[15], PN[16]);
+
+    // Combine field components
+    *Bx = PL[0]*dbx1 + PL[1]*dbx2 + PL[2]*dbx3 + PL[3]*dbx4 + PL[4]*dbx5;
+    *By = PL[0]*dby1 + PL[1]*dby2 + PL[2]*dby3 + PL[3]*dby4 + PL[4]*dby5;
+    *Bz = PL[0]*dbz1 + PL[1]*dbz2 + PL[2]*dbz3 + PL[3]*dbz4 + PL[4]*dbz5;
 }
 
-void t964CurrentLoops() {
 
+
+/**
+ * Calculates the magnetic field components from a system of 4 symmetric current loops.
+ *
+ * @param x    GSM X coordinate (Re)
+ * @param y    GSM Y coordinate (Re)
+ * @param z    GSM Z coordinate (Re)
+ * @param Bx   Pointer to store X component of magnetic field (nT)
+ * @param By   Pointer to store Y component of magnetic field (nT)
+ * @param Bz   Pointer to store Z component of magnetic field (nT)
+ * @param xc   X coordinate of center of 1st quadrant loop
+ * @param yc   Y coordinate of center of 1st quadrant loop (yc > 0)
+ * @param zc   Z coordinate of center of 1st quadrant loop (zc > 0)
+ * @param r    Radius of the loops (same for all four)
+ * @param theta Orientation angle (radians)
+ * @param phi   Orientation angle (radians)
+ */
+void t96Loops4(double x, double y, double z,
+               double* Bx, double* By, double* Bz,
+               double xc, double yc, double zc,
+               double r, double theta, double phi) {
+    
+    double ct = cos(theta);
+    double st = sin(theta);
+    double cp = cos(phi);
+    double sp = sin(phi);
+
+    double bx_total = 0.0, by_total = 0.0, bz_total = 0.0;
+
+    for (int quadrant = 1; quadrant <= 4; ++quadrant) {
+        double xs, yss, zs;
+        if (quadrant == 1) {
+            xs  =  (x - xc) * cp + (y - yc) * sp;
+            yss =  (y - yc) * cp - (x - xc) * sp;
+            zs  =  z - zc;
+        } else if (quadrant == 2) {
+            xs  =  (x - xc) * cp - (y + yc) * sp;
+            yss =  (y + yc) * cp + (x - xc) * sp;
+            zs  =  z - zc;
+        } else if (quadrant == 3) {
+            xs  = -(x - xc) * cp + (y + yc) * sp;
+            yss = -(y + yc) * cp - (x - xc) * sp;
+            zs  =  z + zc;
+        } else { // quadrant == 4
+            xs  = -(x - xc) * cp - (y - yc) * sp;
+            yss = -(y - yc) * cp + (x - xc) * sp;
+            zs  =  z + zc;
+        }
+
+        double xss = xs * ct - zs * st;
+        double zss = zs * ct + xs * st;
+
+        double bxss, bys, bzss;
+        t96Circle(xss, yss, zss, r, &bxss, &bys, &bzss);
+
+        double bxs = bxss * ct + bzss * st;
+        double bxq, byq, bzq;
+
+        switch (quadrant) {
+            case 1:
+                bzq = bzss * ct - bxss * st;
+                bxq =  bxs * cp - bys * sp;
+                byq =  bxs * sp + bys * cp;
+                break;
+            case 2:
+                bzq = bzss * ct - bxss * st;
+                bxq =  bxs * cp + bys * sp;
+                byq = -bxs * sp + bys * cp;
+                break;
+            case 3:
+                bzq = bzss * ct - bxss * st;
+                bxq = -bxs * cp - bys * sp;
+                byq =  bxs * sp - bys * cp;
+                break;
+            case 4:
+                bzq = bzss * ct - bxss * st;
+                bxq = -bxs * cp + bys * sp;
+                byq = -bxs * sp - bys * cp;
+                break;
+        }
+
+        bx_total += bxq;
+        by_total += byq;
+        bz_total += bzq;
+    }
+
+    *Bx = bx_total;
+    *By = by_total;
+    *Bz = bz_total;
 }
+
 
 void t96R2Sheet(double x, double y, double z, double* Bx, double* By, double* Bz) {
     static const double PNONX[] = {
