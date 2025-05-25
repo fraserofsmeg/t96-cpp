@@ -1,2 +1,2 @@
-Use cmake for complication.
+Use cmake for compilation.
 Use gtest to test all the functions providing the same values as the original fortran code.
